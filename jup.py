@@ -1,476 +1,562 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
+import requests
 import json
 import time
-import random
-import requests
+from datetime import datetime
+import pandas as pd
+from typing import Dict, List, Optional
+import base64
+from dataclasses import dataclass
+import asyncio
 
-# Configure page
-st.set_page_config(
-    page_title="🎮 Jupiter Gaming Demo",
-    page_icon="🚀",
-    layout="wide"
-)
+# Configuration using Streamlit secrets
+@st.cache_data
+def get_config():
+    """Get configuration from Streamlit secrets"""
+    try:
+        return {
+            "JUPITER_API_BASE": st.secrets.get("JUPITER_API_BASE", "https://quote-api.jup.ag/v6"),
+            "SOLANA_RPC_URL": st.secrets.get("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com"),
+            "HELIUS_API_KEY": st.secrets.get("HELIUS_API_KEY", "")
+        }
+    except Exception as e:
+        st.error(f"Error loading secrets: {e}")
+        # Return default values if secrets are not available
+        return {
+            "JUPITER_API_BASE": "https://quote-api.jup.ag/v6",
+            "SOLANA_RPC_URL": "https://api.mainnet-beta.solana.com",
+            "HELIUS_API_KEY": ""
+        }
 
-# Custom CSS for gaming theme
-st.markdown("""
-<style>
-    .main > div {
-        padding-top: 2rem;
-    }
-    .stButton > button {
-        background: linear-gradient(45deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border: none;
-        border-radius: 10px;
-        padding: 0.5rem 1rem;
-        font-weight: bold;
-        transition: all 0.3s;
-    }
-    .stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-    }
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 1rem;
-        border-radius: 10px;
-        color: white;
-        text-align: center;
-        margin: 0.5rem 0;
-    }
-    .game-item {
-        background: rgba(255,255,255,0.1);
-        border: 1px solid #667eea;
-        border-radius: 10px;
-        padding: 1rem;
-        margin: 0.5rem 0;
-        backdrop-filter: blur(10px);
-    }
-    .success-alert {
-        background: linear-gradient(45deg, #56ab2f, #a8e6cf);
-        padding: 1rem;
-        border-radius: 10px;
-        color: white;
-        font-weight: bold;
-    }
-</style>
-""", unsafe_allow_html=True)
+@dataclass
+class GameItem:
+    id: str
+    name: str
+    rarity: str
+    token_mint: str
+    price_sol: float
+    description: str
+    game: str
+
+@dataclass
+class Achievement:
+    id: str
+    name: str
+    description: str
+    token_reward: str
+    reward_amount: float
+    unlocked: bool
+
+@dataclass
+class GuildMember:
+    wallet: str
+    role: str
+    contribution_score: int
+    joined_date: str
+
+class JupiterAPI:
+    def __init__(self):
+        self.config = get_config()
+    
+    def get_token_price(self, mint_address: str) -> float:
+        """Get token price from Jupiter API"""
+        try:
+            response = requests.get(f"{self.config['JUPITER_API_BASE']}/price?ids={mint_address}")
+            if response.status_code == 200:
+                data = response.json()
+                return data.get('data', {}).get(mint_address, {}).get('price', 0.0)
+        except Exception as e:
+            st.error(f"Error fetching price: {e}")
+        return 0.0
+    
+    def get_swap_quote(self, input_mint: str, output_mint: str, amount: int):
+        """Get swap quote from Jupiter"""
+        try:
+            params = {
+                'inputMint': input_mint,
+                'outputMint': output_mint,
+                'amount': amount,
+                'slippageBps': 50  # 0.5% slippage
+            }
+            response = requests.get(f"{self.config['JUPITER_API_BASE']}/quote", params=params)
+            if response.status_code == 200:
+                return response.json()
+        except Exception as e:
+            st.error(f"Error getting swap quote: {e}")
+        return None
+
+class HeliusAPI:
+    def __init__(self):
+        self.config = get_config()
+        self.api_key = self.config['HELIUS_API_KEY']
+        self.base_url = f"https://api.helius.xyz/v0"
+    
+    def get_wallet_assets(self, wallet_address: str):
+        """Get wallet assets using Helius API"""
+        if not self.api_key:
+            st.warning("Helius API key not configured")
+            return []
+        
+        try:
+            headers = {
+                'Authorization': f'Bearer {self.api_key}',
+                'Content-Type': 'application/json'
+            }
+            response = requests.get(
+                f"{self.base_url}/addresses/{wallet_address}/balances?api-key={self.api_key}",
+                headers=headers
+            )
+            if response.status_code == 200:
+                return response.json()
+        except Exception as e:
+            st.error(f"Error fetching wallet assets: {e}")
+        return []
+
+# Removed unnecessary API classes - keeping only Jupiter and Helius
+
+class SolanaWallet:
+    def __init__(self):
+        self.connected = False
+        self.public_key = None
+        self.balance = 0.0
+        self.helius_api = HeliusAPI()
+    
+    def connect_wallet(self, wallet_type: str = "Phantom"):
+        """Simulate wallet connection - In production, use Streamlit JS bridge"""
+        if wallet_type in st.session_state.get('available_wallets', []):
+            self.connected = True
+            self.public_key = st.session_state.get('wallet_address', 'Demo_Wallet_Address')
+            self.balance = st.session_state.get('wallet_balance', 5.0)
+            return True
+        return False
+    
+    def disconnect_wallet(self):
+        """Disconnect wallet"""
+        self.connected = False
+        self.public_key = None
+        self.balance = 0.0
+    
+    def get_wallet_assets(self):
+        """Get wallet assets using Helius API"""
+        if self.connected and self.public_key:
+            return self.helius_api.get_wallet_assets(self.public_key)
+        return []
+
+class GameItemMarketplace:
+    def __init__(self):
+        self.items = self._initialize_items()
+        self.jupiter_api = JupiterAPI()
+    
+    def _initialize_items(self) -> List[GameItem]:
+        """Initialize demo game items"""
+        return [
+            GameItem("sword_001", "Legendary Fire Sword", "Legendary", "So11111111111111111111111111111111111111112", 2.5, "A powerful sword that burns enemies", "Fantasy RPG"),
+            GameItem("shield_001", "Diamond Shield", "Epic", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", 1.8, "Unbreakable diamond shield", "Fantasy RPG"),
+            GameItem("bow_001", "Elven Longbow", "Rare", "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", 1.2, "Precise elven craftsmanship", "Fantasy RPG"),
+            GameItem("skin_001", "Cosmic Warrior Skin", "Legendary", "So11111111111111111111111111111111111111112", 3.0, "Exclusive cosmic themed skin", "Battle Arena"),
+            GameItem("car_001", "Speed Demon Vehicle", "Epic", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", 2.2, "Fastest car in the racing game", "Racing World"),
+        ]
+    
+    def get_items_by_game(self, game: str) -> List[GameItem]:
+        return [item for item in self.items if item.game == game]
+    
+    def get_real_time_price(self, token_mint: str) -> float:
+        """Get real-time price using Jupiter API"""
+        return self.jupiter_api.get_token_price(token_mint)
+
+class AchievementSystem:
+    def __init__(self):
+        self.achievements = self._initialize_achievements()
+    
+    def _initialize_achievements(self) -> List[Achievement]:
+        return [
+            Achievement("ach_001", "First Victory", "Win your first match", "GAME", 10.0, True),
+            Achievement("ach_002", "Speed Demon", "Complete 10 races under 2 minutes", "SPEED", 25.0, False),
+            Achievement("ach_003", "Treasure Hunter", "Find 50 hidden treasures", "TREASURE", 50.0, True),
+            Achievement("ach_004", "Guild Leader", "Lead a guild for 30 days", "LEADER", 100.0, False),
+            Achievement("ach_005", "Master Trader", "Complete 100 item trades", "TRADE", 75.0, False),
+        ]
+
+class GuildTreasury:
+    def __init__(self):
+        self.guild_name = ""
+        self.treasury_balance = 0.0
+        self.members = []
+        self.transactions = []
+    
+    def add_member(self, wallet: str, role: str = "Member"):
+        member = GuildMember(wallet, role, 0, datetime.now().strftime("%Y-%m-%d"))
+        self.members.append(member)
+    
+    def deposit_to_treasury(self, amount: float, from_wallet: str):
+        self.treasury_balance += amount
+        transaction = {
+            "type": "Deposit",
+            "amount": amount,
+            "from": from_wallet,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        self.transactions.append(transaction)
+    
+    def withdraw_from_treasury(self, amount: float, to_wallet: str, purpose: str):
+        if amount <= self.treasury_balance:
+            self.treasury_balance -= amount
+            transaction = {
+                "type": "Withdrawal",
+                "amount": amount,
+                "to": to_wallet,
+                "purpose": purpose,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            self.transactions.append(transaction)
+            return True
+        return False
 
 # Initialize session state
-if 'user_wallet' not in st.session_state:
-    st.session_state.user_wallet = {
-        'SOL': 10.0,
-        'USDC': 500.0,
-        'GAME_TOKENS': 1000.0
-    }
+if 'wallet' not in st.session_state:
+    st.session_state.wallet = SolanaWallet()
+    st.session_state.marketplace = GameItemMarketplace()
+    st.session_state.achievements = AchievementSystem()
+    st.session_state.guild = GuildTreasury()
+    st.session_state.available_wallets = ["Phantom", "Solflare", "Backpack"]
+    st.session_state.wallet_address = None
+    st.session_state.wallet_balance = 5.0
 
-if 'game_items' not in st.session_state:
-    st.session_state.game_items = [
-        {'name': '⚔️ Legendary Sword', 'rarity': 'Legendary', 'price_sol': 2.5, 'price_usdc': 125.0, 'owned': 0},
-        {'name': '🛡️ Magic Shield', 'rarity': 'Epic', 'price_sol': 1.2, 'price_usdc': 60.0, 'owned': 0},
-        {'name': '🧪 Health Potion', 'rarity': 'Common', 'price_sol': 0.1, 'price_usdc': 5.0, 'owned': 3},
-        {'name': '🐲 Dragon Armor', 'rarity': 'Mythic', 'price_sol': 5.0, 'price_usdc': 250.0, 'owned': 0},
-        {'name': '👢 Speed Boots', 'rarity': 'Rare', 'price_sol': 0.8, 'price_usdc': 40.0, 'owned': 1}
-    ]
+def check_api_keys():
+    """Check if API keys are configured properly"""
+    config = get_config()
+    api_status = {}
+    
+    # Check which APIs are configured
+    api_status['Jupiter'] = True  # Jupiter doesn't require API key for basic functionality
+    api_status['Helius'] = bool(config['HELIUS_API_KEY'])
+    
+    return api_status
 
-if 'achievements' not in st.session_state:
-    st.session_state.achievements = [
-        {'name': '🎯 First Kill', 'reward': 10, 'completed': True, 'claimed': False},
-        {'name': '📈 Level 10 Reached', 'reward': 50, 'completed': True, 'claimed': False},
-        {'name': '👑 Boss Defeated', 'reward': 100, 'completed': False, 'claimed': False},
-        {'name': '🏆 Arena Champion', 'reward': 200, 'completed': False, 'claimed': False}
-    ]
+def display_api_status():
+    """Display API configuration status"""
+    with st.expander("🔑 API Configuration Status"):
+        api_status = check_api_keys()
+        
+        for api_name, is_configured in api_status.items():
+            status_icon = "✅" if is_configured else "❌"
+            st.write(f"{status_icon} {api_name}")
+        
+        unconfigured_apis = [api for api, status in api_status.items() if not status]
+        if unconfigured_apis:
+            st.warning(f"⚠️ Unconfigured APIs: {', '.join(unconfigured_apis)}")
+            st.info("Add HELIUS_API_KEY to Streamlit secrets for wallet data")
 
-if 'trade_history' not in st.session_state:
-    st.session_state.trade_history = []
-
-# Simulate Jupiter API (for demo purposes)
-def get_jupiter_quote(input_token, output_token, amount):
-    """Simulate Jupiter price quote"""
-    rates = {
-        ('SOL', 'USDC'): 50.0 + random.uniform(-2, 2),
-        ('USDC', 'SOL'): 0.02 + random.uniform(-0.001, 0.001),
-        ('GAME_TOKENS', 'SOL'): 0.005 + random.uniform(-0.0005, 0.0005),
-        ('SOL', 'GAME_TOKENS'): 200 + random.uniform(-10, 10)
-    }
+def main():
+    st.set_page_config(
+        page_title="Jupiter Gaming Micro-Trading Platform",
+        page_icon="🎮",
+        layout="wide"
+    )
     
-    rate = rates.get((input_token, output_token), 1.0)
-    output_amount = amount * rate
-    slippage = random.uniform(0.1, 0.5)
+    # Header
+    st.title("🎮 Jupiter Gaming Micro-Trading Platform")
+    st.markdown("Trade game assets, earn tokens, and manage guild treasuries on Solana")
     
-    return {
-        'inputAmount': amount,
-        'outputAmount': output_amount,
-        'priceImpact': slippage,
-        'route': f"{input_token} → {output_token}",
-        'estimatedGas': 0.0001
-    }
-
-def execute_jupiter_swap(input_token, output_token, amount):
-    """Simulate Jupiter swap execution"""
-    if st.session_state.user_wallet[input_token] < amount:
-        return False, "Insufficient balance"
+    # Display API status
+    display_api_status()
     
-    quote = get_jupiter_quote(input_token, output_token, amount)
-    
-    # Update balances
-    st.session_state.user_wallet[input_token] -= amount
-    st.session_state.user_wallet[output_token] += quote['outputAmount']
-    
-    # Add to trade history
-    st.session_state.trade_history.append({
-        'timestamp': datetime.now().strftime('%H:%M:%S'),
-        'type': 'Swap',
-        'details': f"{amount:.4f} {input_token} → {quote['outputAmount']:.4f} {output_token}",
-        'status': '✅ Success'
-    })
-    
-    return True, f"Swapped {amount:.4f} {input_token} for {quote['outputAmount']:.4f} {output_token}"
-
-# Header
-st.markdown("""
-<div style='text-align: center; padding: 2rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 15px; margin-bottom: 2rem;'>
-    <h1 style='color: white; font-size: 3rem; margin: 0;'>🎮 Jupiter Gaming Hub</h1>
-    <p style='color: white; font-size: 1.2rem; margin: 0.5rem 0 0 0;'>Trade Gaming Assets with Jupiter's Swap Aggregation</p>
-</div>
-""", unsafe_allow_html=True)
-
-# Wallet Display
-st.sidebar.markdown("## 💰 Your Gaming Wallet")
-for token, balance in st.session_state.user_wallet.items():
-    if token == 'SOL':
-        st.sidebar.metric(f"{token}", f"{balance:.4f}", f"~${balance*50:.2f}")
-    elif token == 'USDC':
-        st.sidebar.metric(f"{token}", f"{balance:.2f}", f"${balance:.2f}")
-    else:
-        st.sidebar.metric(f"{token}", f"{int(balance)}", f"~{balance*0.005:.2f} SOL")
-
-# Main tabs
-tab1, tab2, tab3, tab4 = st.tabs([
-    "🛒 **Item Trading**", 
-    "🔄 **Jupiter Swaps**", 
-    "🏆 **Achievements**", 
-    "📊 **Portfolio**"
-])
-
-with tab1:
-    st.header("🛒 Gaming Item Marketplace")
-    st.markdown("*Trade in-game items powered by Jupiter Protocol*")
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader("Available Items")
+    # Wallet Connection Sidebar
+    with st.sidebar:
+        st.header("🔗 Wallet Connection")
         
-        for i, item in enumerate(st.session_state.game_items):
-            with st.container():
-                item_col1, item_col2, item_col3, item_col4 = st.columns([2, 1, 1, 1])
-                
-                with item_col1:
-                    st.markdown(f"**{item['name']}**")
-                    rarity_colors = {
-                        'Common': '🟢', 'Rare': '🔵', 'Epic': '🟣', 
-                        'Legendary': '🟠', 'Mythic': '🔴'
-                    }
-                    st.markdown(f"{rarity_colors[item['rarity']]} {item['rarity']}")
-                
-                with item_col2:
-                    st.markdown(f"**{item['price_sol']:.2f} SOL**")
-                    st.markdown(f"${item['price_usdc']:.0f} USDC")
-                
-                with item_col3:
-                    st.markdown(f"**Owned: {item['owned']}**")
-                
-                with item_col4:
-                    if st.button(f"Buy with SOL", key=f"buy_sol_{i}"):
-                        if st.session_state.user_wallet['SOL'] >= item['price_sol']:
-                            st.session_state.user_wallet['SOL'] -= item['price_sol']
-                            st.session_state.game_items[i]['owned'] += 1
-                            st.session_state.trade_history.append({
-                                'timestamp': datetime.now().strftime('%H:%M:%S'),
-                                'type': 'Purchase',
-                                'details': f"Bought {item['name']} for {item['price_sol']} SOL",
-                                'status': '✅ Success'
-                            })
-                            st.success(f"Purchased {item['name']}! 🎉")
-                            time.sleep(1)
-                            st.rerun()
-                        else:
-                            st.error("Insufficient SOL balance!")
-                    
-                    if item['owned'] > 0:
-                        if st.button(f"Sell", key=f"sell_{i}"):
-                            st.session_state.user_wallet['SOL'] += item['price_sol'] * 0.95  # 5% market fee
-                            st.session_state.game_items[i]['owned'] -= 1
-                            st.session_state.trade_history.append({
-                                'timestamp': datetime.now().strftime('%H:%M:%S'),
-                                'type': 'Sale',
-                                'details': f"Sold {item['name']} for {item['price_sol']*0.95:.4f} SOL",
-                                'status': '✅ Success'
-                            })
-                            st.success(f"Sold {item['name']}! 💰")
-                            time.sleep(1)
-                            st.rerun()
-                
-                st.markdown("---")
-    
-    with col2:
-        st.subheader("🔥 Market Stats")
-        
-        # Mock market data
-        market_data = {
-            'Total Volume (24h)': '$12,450',
-            'Active Traders': '1,247',
-            'Items Listed': '8,923',
-            'Avg Price': '1.2 SOL'
-        }
-        
-        for stat, value in market_data.items():
-            st.metric(stat, value)
-        
-        st.subheader("📈 Price Trends")
-        
-        # Generate mock price chart
-        dates = pd.date_range(start='2024-01-20', end='2024-01-30', freq='D')
-        prices = np.cumsum(np.random.randn(len(dates)) * 0.1) + 50
-        
-        fig = px.line(x=dates, y=prices, title="SOL/USD Price")
-        fig.update_layout(height=200, showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-
-with tab2:
-    st.header("🔄 Jupiter Swap Aggregation")
-    st.markdown("*Powered by Jupiter Protocol - Best rates across all Solana DEXs*")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("💱 Swap Tokens")
-        
-        # Swap interface
-        from_token = st.selectbox("From Token", list(st.session_state.user_wallet.keys()))
-        from_amount = st.number_input(
-            f"Amount ({from_token})", 
-            min_value=0.0001, 
-            max_value=float(st.session_state.user_wallet[from_token]), 
-            value=1.0, 
-            step=0.1,
-            format="%.4f"
-        )
-        
-        to_token = st.selectbox("To Token", [t for t in st.session_state.user_wallet.keys() if t != from_token])
-        
-        if st.button("🔍 Get Jupiter Quote"):
-            with st.spinner("Fetching best routes from Jupiter..."):
-                time.sleep(1)  # Simulate API call
-                quote = get_jupiter_quote(from_token, to_token, from_amount)
-                
-                st.success("Quote received! 📋")
-                st.json({
-                    "Route": quote['route'],
-                    "Input": f"{quote['inputAmount']:.4f} {from_token}",
-                    "Output": f"{quote['outputAmount']:.4f} {to_token}",
-                    "Price Impact": f"{quote['priceImpact']:.2f}%",
-                    "Estimated Gas": f"{quote['estimatedGas']:.6f} SOL"
-                })
-                
-                if st.button("⚡ Execute Swap"):
-                    with st.spinner("Executing swap via Jupiter..."):
-                        time.sleep(2)  # Simulate transaction
-                        success, message = execute_jupiter_swap(from_token, to_token, from_amount)
-                        
-                        if success:
-                            st.success(f"🎉 {message}")
-                            st.balloons()
-                            time.sleep(2)
-                            st.rerun()
-                        else:
-                            st.error(f"❌ {message}")
-    
-    with col2:
-        st.subheader("📊 Jupiter Stats")
-        
-        jupiter_stats = {
-            'Total Volume (24h)': '$45.2M',
-            'Best Price Routes': '847',
-            'Average Slippage': '0.12%',
-            'Successful Swaps': '99.8%'
-        }
-        
-        for stat, value in jupiter_stats.items():
-            st.metric(stat, value)
-        
-        st.subheader("🔄 Recent Swaps")
-        
-        if st.session_state.trade_history:
-            recent_trades = pd.DataFrame(st.session_state.trade_history[-5:])
-            st.dataframe(recent_trades, use_container_width=True)
+        if not st.session_state.wallet.connected:
+            wallet_type = st.selectbox("Select Wallet", st.session_state.available_wallets)
+            
+            if st.button("Connect Wallet", type="primary"):
+                if st.session_state.wallet.connect_wallet(wallet_type):
+                    st.success(f"Connected to {wallet_type}!")
+                    st.rerun()
+                else:
+                    st.error("Failed to connect wallet")
         else:
-            st.info("No recent swaps. Make your first trade above! 👆")
-
-with tab3:
-    st.header("🏆 Achievement Rewards")
-    st.markdown("*Convert your gaming achievements into tradeable tokens*")
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader("🎯 Your Achievements")
+            st.success("✅ Wallet Connected")
+            st.write(f"**Address:** {st.session_state.wallet.public_key[:8]}...{st.session_state.wallet.public_key[-8:]}")
+            st.write(f"**Balance:** {st.session_state.wallet.balance} SOL")
+            
+            if st.button("Disconnect"):
+                st.session_state.wallet.disconnect_wallet()
+                st.rerun()
         
-        for i, achievement in enumerate(st.session_state.achievements):
-            with st.container():
-                ach_col1, ach_col2, ach_col3 = st.columns([2, 1, 1])
+        st.divider()
+        
+        # Quick Stats
+        st.header("📊 Quick Stats")
+        st.metric("Items Owned", 12)
+        st.metric("Achievements", 3)
+        st.metric("Guild Treasury", "2.4 SOL")
+    
+    # Main Content Tabs
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "🛒 Item Marketplace", 
+        "🏆 Achievements", 
+        "💰 Play-to-Earn", 
+        "🏛️ Guild Treasury",
+        "📈 Trading Analytics"
+    ])
+    
+    # Tab 1: Item Marketplace
+    with tab1:
+        st.header("🛒 In-Game Asset Exchange")
+        
+        if not st.session_state.wallet.connected:
+            st.warning("Please connect your wallet to access the marketplace")
+            return
+        
+        # Game selection
+        games = ["All Games", "Fantasy RPG", "Battle Arena", "Racing World"]
+        selected_game = st.selectbox("Filter by Game", games)
+        
+        # Display items
+        items = st.session_state.marketplace.items
+        if selected_game != "All Games":
+            items = st.session_state.marketplace.get_items_by_game(selected_game)
+        
+        cols = st.columns(3)
+        for i, item in enumerate(items):
+            with cols[i % 3]:
+                with st.container():
+                    st.markdown(f"### {item.name}")
+                    st.markdown(f"**Rarity:** {item.rarity}")
+                    st.markdown(f"**Game:** {item.game}")
+                    
+                    # Try to get real-time price
+                    real_time_price = st.session_state.marketplace.get_real_time_price(item.token_mint)
+                    display_price = real_time_price if real_time_price > 0 else item.price_sol
+                    st.markdown(f"**Price:** {display_price:.4f} SOL")
+                    
+                    st.markdown(f"*{item.description}*")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button(f"Buy", key=f"buy_{item.id}"):
+                            if st.session_state.wallet.balance >= display_price:
+                                st.session_state.wallet.balance -= display_price
+                                st.success(f"Purchased {item.name}!")
+                                st.rerun()
+                            else:
+                                st.error("Insufficient balance")
+                    
+                    with col2:
+                        if st.button(f"Swap", key=f"swap_{item.id}"):
+                            st.info("Opening swap interface...")
+        
+        # Swap Interface
+        st.divider()
+        st.subheader("🔄 Token Swap Interface")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            input_token = st.selectbox("From Token", ["SOL", "USDC", "USDT"])
+        with col2:
+            output_token = st.selectbox("To Token", ["GAME", "SPEED", "TREASURE"])
+        with col3:
+            amount = st.number_input("Amount", min_value=0.1, value=1.0, step=0.1)
+        
+        if st.button("Get Quote"):
+            with st.spinner("Getting quote from Jupiter..."):
+                # Use Jupiter API for real quote if available
+                jupiter_api = JupiterAPI()
+                # For demo purposes, we'll simulate the quote
+                time.sleep(1)
+                estimated_output = amount * 100  # Mock conversion rate
+                st.success(f"Quote: {amount} {input_token} → {estimated_output:.2f} {output_token}")
                 
-                with ach_col1:
-                    st.markdown(f"**{achievement['name']}**")
-                    if achievement['completed']:
-                        st.markdown("✅ **Completed**")
-                    else:
-                        st.markdown("⏳ In Progress")
+                if st.button("Execute Swap"):
+                    st.success("Swap executed successfully!")
+    
+    # Tab 2: Achievements
+    with tab2:
+        st.header("🏆 Achievement Token Rewards")
+        
+        if not st.session_state.wallet.connected:
+            st.warning("Please connect your wallet to view achievements")
+            return
+        
+        for achievement in st.session_state.achievements.achievements:
+            with st.expander(f"{'✅' if achievement.unlocked else '⏳'} {achievement.name}"):
+                st.write(f"**Description:** {achievement.description}")
+                st.write(f"**Reward:** {achievement.reward_amount} {achievement.token_reward}")
+                st.write(f"**Status:** {'Unlocked' if achievement.unlocked else 'Locked'}")
                 
-                with ach_col2:
-                    st.markdown(f"**Reward: {achievement['reward']} tokens**")
-                
-                with ach_col3:
-                    if achievement['completed'] and not achievement['claimed']:
-                        if st.button(f"Claim Reward", key=f"claim_{i}"):
-                            st.session_state.user_wallet['GAME_TOKENS'] += achievement['reward']
-                            st.session_state.achievements[i]['claimed'] = True
-                            st.session_state.trade_history.append({
-                                'timestamp': datetime.now().strftime('%H:%M:%S'),
-                                'type': 'Achievement',
-                                'details': f"Claimed {achievement['reward']} tokens from {achievement['name']}",
-                                'status': '🏆 Claimed'
-                            })
-                            st.success(f"Claimed {achievement['reward']} tokens! 🎉")
-                            time.sleep(1)
-                            st.rerun()
-                    elif achievement['claimed']:
-                        st.markdown("✅ **Claimed**")
-                    elif not achievement['completed']:
-                        if st.button(f"Complete", key=f"complete_{i}"):
-                            st.session_state.achievements[i]['completed'] = True
-                            st.success(f"Achievement completed! 🎯")
-                            time.sleep(1)
-                            st.rerun()
-                
-                st.markdown("---")
+                if achievement.unlocked:
+                    if st.button(f"Claim {achievement.reward_amount} {achievement.token_reward}", key=f"claim_{achievement.id}"):
+                        st.success(f"Claimed {achievement.reward_amount} {achievement.token_reward} tokens!")
+                        # Add tokens to wallet balance simulation
+                        st.session_state.wallet.balance += achievement.reward_amount * 0.01  # Convert to SOL equivalent
     
-    with col2:
-        st.subheader("📈 Achievement Progress")
+    # Tab 3: Play-to-Earn
+    with tab3:
+        st.header("💰 Play-to-Earn Integration")
         
-        completed = sum(1 for a in st.session_state.achievements if a['completed'])
-        total = len(st.session_state.achievements)
-        progress = completed / total
+        if not st.session_state.wallet.connected:
+            st.warning("Please connect your wallet to access play-to-earn features")
+            return
         
-        st.metric("Completion Rate", f"{progress*100:.0f}%", f"{completed}/{total}")
+        # Game session simulator
+        st.subheader("🎮 Active Game Session")
         
-        total_rewards = sum(a['reward'] for a in st.session_state.achievements if a['claimed'])
-        st.metric("Total Rewards Claimed", f"{total_rewards} tokens")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Current Score", "2,450")
+        with col2:
+            st.metric("Tokens Earned", "124 GAME")
+        with col3:
+            st.metric("Session Time", "23:45")
         
-        # Auto-convert settings
-        st.subheader("⚙️ Auto-Convert")
-        auto_convert = st.checkbox("Auto-convert to SOL", value=True)
-        if auto_convert:
-            threshold = st.slider("Convert when balance >", 50, 500, 100)
-            st.info(f"Will auto-convert {threshold}+ tokens to SOL")
-
-with tab4:
-    st.header("📊 Portfolio Dashboard")
-    st.markdown("*Your complete gaming asset overview*")
+        # Auto-swap settings
+        st.subheader("⚙️ Auto-Swap Settings")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            auto_swap = st.checkbox("Enable Auto-Swap")
+            threshold = st.number_input("Swap when earning exceeds", value=100, step=10)
+        with col2:
+            swap_to = st.selectbox("Auto-swap to", ["SOL", "USDC", "Keep as GAME"])
+            swap_percentage = st.slider("Percentage to swap", 0, 100, 50)
+        
+        if auto_swap:
+            st.info(f"Auto-swap enabled: {swap_percentage}% of earnings will be swapped to {swap_to} when threshold of {threshold} tokens is reached")
+        
+        # Manual claim
+        st.subheader("💎 Claim Rewards")
+        pending_rewards = 124
+        
+        if st.button(f"Claim {pending_rewards} GAME Tokens"):
+            st.success(f"Claimed {pending_rewards} GAME tokens!")
+            if auto_swap and pending_rewards >= threshold:
+                swap_amount = pending_rewards * (swap_percentage / 100)
+                st.info(f"Auto-swapping {swap_amount:.1f} GAME to {swap_to}")
     
-    col1, col2 = st.columns(2)
+    # Tab 4: Guild Treasury
+    with tab4:
+        st.header("🏛️ Gaming Guild Treasury")
+        
+        if not st.session_state.wallet.connected:
+            st.warning("Please connect your wallet to access guild features")
+            return
+        
+        # Guild setup
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Guild Information")
+            guild_name = st.text_input("Guild Name", value="Crypto Warriors")
+            st.session_state.guild.guild_name = guild_name
+            
+            st.metric("Treasury Balance", f"{st.session_state.guild.treasury_balance:.2f} SOL")
+            st.metric("Total Members", len(st.session_state.guild.members))
+        
+        with col2:
+            st.subheader("Treasury Actions")
+            
+            # Deposit
+            deposit_amount = st.number_input("Deposit Amount (SOL)", min_value=0.1, value=1.0, step=0.1)
+            if st.button("Deposit to Treasury"):
+                if st.session_state.wallet.balance >= deposit_amount:
+                    st.session_state.wallet.balance -= deposit_amount
+                    st.session_state.guild.deposit_to_treasury(deposit_amount, st.session_state.wallet.public_key)
+                    st.success(f"Deposited {deposit_amount} SOL to guild treasury!")
+                    st.rerun()
+                else:
+                    st.error("Insufficient balance")
+            
+            # Withdraw
+            withdraw_amount = st.number_input("Withdraw Amount (SOL)", min_value=0.1, value=0.5, step=0.1)
+            withdraw_purpose = st.text_input("Purpose", placeholder="e.g., Tournament prize")
+            if st.button("Withdraw from Treasury"):
+                if st.session_state.guild.withdraw_from_treasury(withdraw_amount, st.session_state.wallet.public_key, withdraw_purpose):
+                    st.session_state.wallet.balance += withdraw_amount
+                    st.success(f"Withdrawn {withdraw_amount} SOL from guild treasury!")
+                    st.rerun()
+                else:
+                    st.error("Insufficient treasury balance")
+        
+        # Guild Members
+        st.subheader("👥 Guild Members")
+        
+        # Add member
+        with st.expander("Add New Member"):
+            new_member_wallet = st.text_input("Wallet Address")
+            new_member_role = st.selectbox("Role", ["Member", "Officer", "Leader"])
+            if st.button("Add Member"):
+                st.session_state.guild.add_member(new_member_wallet, new_member_role)
+                st.success("Member added successfully!")
+                st.rerun()
+        
+        # Display members
+        if st.session_state.guild.members:
+            members_df = pd.DataFrame([
+                {
+                    "Wallet": member.wallet[:8] + "..." + member.wallet[-8:] if len(member.wallet) > 16 else member.wallet,
+                    "Role": member.role,
+                    "Contribution": member.contribution_score,
+                    "Joined": member.joined_date
+                }
+                for member in st.session_state.guild.members
+            ])
+            st.dataframe(members_df, use_container_width=True)
+        
+        # Transaction History
+        st.subheader("📊 Treasury Transactions")
+        if st.session_state.guild.transactions:
+            transactions_df = pd.DataFrame(st.session_state.guild.transactions)
+            st.dataframe(transactions_df, use_container_width=True)
+        else:
+            st.info("No transactions yet")
     
-    with col1:
-        st.subheader("💰 Portfolio Value")
+    # Tab 5: Trading Analytics
+    with tab5:
+        st.header("📈 Trading Analytics & Insights")
         
-        # Calculate total portfolio value in USD
-        sol_price = 50.0  # Mock SOL price
-        total_value = (
-            st.session_state.user_wallet['SOL'] * sol_price +
-            st.session_state.user_wallet['USDC'] +
-            st.session_state.user_wallet['GAME_TOKENS'] * 0.25  # Mock token value
-        )
+        if not st.session_state.wallet.connected:
+            st.warning("Please connect your wallet to view analytics")
+            return
         
-        st.metric("Total Portfolio Value", f"${total_value:.2f}", "↗️ +12.5%")
+        # Portfolio overview
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Portfolio Value", "12.5 SOL", "↗️ +2.3%")
+        with col2:
+            st.metric("24h Trading Volume", "156 GAME", "↗️ +15%")
+        with col3:
+            st.metric("Items Traded", "23", "↗️ +3")
+        with col4:
+            st.metric("Profit/Loss", "+3.2 SOL", "↗️ +34%")
         
-        # Portfolio breakdown
-        portfolio_data = {
-            'Asset': ['SOL', 'USDC', 'GAME_TOKENS'],
-            'Balance': [
-                st.session_state.user_wallet['SOL'],
-                st.session_state.user_wallet['USDC'],
-                st.session_state.user_wallet['GAME_TOKENS']
-            ],
-            'Value (USD)': [
-                st.session_state.user_wallet['SOL'] * sol_price,
-                st.session_state.user_wallet['USDC'],
-                st.session_state.user_wallet['GAME_TOKENS'] * 0.25
-            ]
-        }
+        # Price charts (mock data)
+        st.subheader("📊 Token Price Charts")
         
-        df_portfolio = pd.DataFrame(portfolio_data)
-        st.dataframe(df_portfolio, use_container_width=True)
+        # Generate mock price data
+        import numpy as np
+        dates = pd.date_range(start='2024-01-01', end='2024-12-31', freq='D')
+        game_prices = np.random.randn(len(dates)).cumsum() + 100
         
-        # Portfolio pie chart
-        fig_pie = px.pie(
-            values=df_portfolio['Value (USD)'], 
-            names=df_portfolio['Asset'],
-            title="Portfolio Allocation"
-        )
-        st.plotly_chart(fig_pie, use_container_width=True)
-    
-    with col2:
-        st.subheader("📈 Performance")
+        chart_data = pd.DataFrame({
+            'Date': dates,
+            'GAME Token': game_prices,
+            'SPEED Token': game_prices * 0.8 + np.random.randn(len(dates)) * 5,
+            'TREASURE Token': game_prices * 1.2 + np.random.randn(len(dates)) * 8
+        })
         
-        # Mock performance data
-        dates = pd.date_range(start='2024-01-01', end='2024-01-30', freq='D')
-        portfolio_values = 1000 + np.cumsum(np.random.randn(len(dates)) * 20)
+        st.line_chart(chart_data.set_index('Date'))
         
-        fig_performance = px.line(
-            x=dates, 
-            y=portfolio_values,
-            title="Portfolio Value Over Time",
-            labels={'y': 'Value (USD)', 'x': 'Date'}
-        )
-        st.plotly_chart(fig_performance, use_container_width=True)
+        # Trading opportunities
+        st.subheader("🎯 Trading Opportunities")
         
-        st.subheader("🎮 Gaming Stats")
+        opportunities = [
+            {"Item": "Legendary Fire Sword", "Current Price": "2.5 SOL", "Trend": "↗️ Rising", "Recommendation": "HOLD"},
+            {"Item": "Diamond Shield", "Current Price": "1.8 SOL", "Trend": "↘️ Falling", "Recommendation": "BUY"},
+            {"Item": "Elven Longbow", "Current Price": "1.2 SOL", "Trend": "→ Stable", "Recommendation": "HOLD"},
+            {"Item": "Cosmic Warrior Skin", "Current Price": "3.0 SOL", "Trend": "↗️ Rising", "Recommendation": "SELL"},
+        ]
         
-        gaming_stats = {
-            'Items Owned': sum(item['owned'] for item in st.session_state.game_items),
-            'Achievements': f"{sum(1 for a in st.session_state.achievements if a['completed'])}/4",
-            'Total Trades': len(st.session_state.trade_history),
-            'Favorite Game': 'Solana Quest'
-        }
-        
-        for stat, value in gaming_stats.items():
-            st.metric(stat, value)
+        opportunities_df = pd.DataFrame(opportunities)
+        st.dataframe(opportunities_df, use_container_width=True)
 
-# Footer
-st.markdown("---")
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.markdown("### 🚀 Powered by Jupiter")
-    st.markdown("Best rates across all Solana DEXs")
-
-with col2:
-    st.markdown("### ⚡ Built on Solana")
-    st.markdown("Fast, cheap, and scalable")
-
-with col3:
-    st.markdown("### 🎮 For Gamers")
-    st.markdown("Seamless Web3 gaming experience")
-
-# Live demo indicator
-st.markdown("""
-<div style='position: fixed; top: 10px; right: 10px; background: #28a745; color: white; padding: 0.5rem 1rem; border-radius: 20px; font-weight: bold; z-index: 999;'>
-    🟢 LIVE DEMO
-</div>
-""", unsafe_allow_html=True)
+if __name__ == "__main__":
+    main()
